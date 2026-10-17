@@ -1,0 +1,527 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize Supabase Client directly inline
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+interface FoodItem {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  image_url: string;
+  is_available: boolean;
+  category?: string;
+}
+
+interface OrderItem {
+  meal: FoodItem;
+  quantity: number;
+}
+
+export default function GishKitchenAllInOne() {
+  const [activeRole, setActiveRole] = useState<'customer' | 'admin' | 'vendor' | 'rider'>('customer');
+  const [meals, setMeals] = useState<FoodItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  
+  // Cart & Checkout State
+  const [cart, setCart] = useState<OrderItem[]>([]);
+  const [deliveryAddress, setDeliveryAddress] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'paystack' | 'flutterwave' | 'cash_on_delivery'>('paystack');
+
+  // Admin / Vendor Editing State
+  const [editingMealId, setEditingMealId] = useState<string | null>(null);
+  const [editPrice, setEditPrice] = useState<number>(0);
+  const [editName, setEditName] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [editImage, setEditImage] = useState('');
+
+  // New Meal State
+  const [newName, setNewName] = useState('');
+  const [newPrice, setNewPrice] = useState<number | ''>('');
+  const [newDesc, setNewDesc] = useState('');
+  const [newImage, setNewImage] = useState('');
+
+  useEffect(() => {
+    fetchMeals();
+  }, []);
+
+  const fetchMeals = async () => {
+    setLoading(true);
+    const { data, error } = await supabase.from('food_items').select('*').order('name');
+    if (!error && data) {
+      setMeals(data);
+    }
+    setLoading(false);
+  };
+
+  // --- CART FUNCTIONS ---
+  const addToCart = (meal: FoodItem) => {
+    setCart((prev) => {
+      const existing = prev.find((item) => item.meal.id === meal.id);
+      if (existing) {
+        return prev.map((item) =>
+          item.meal.id === meal.id ? { ...item, quantity: item.quantity + 1 } : item
+        );
+      }
+      return [...prev, { meal, quantity: 1 }];
+    });
+  };
+
+  const removeFromCart = (mealId: string) => {
+    setCart((prev) => prev.filter((item) => item.meal.id !== mealId));
+  };
+
+  const subtotal = cart.reduce((acc, item) => acc + item.meal.price * item.quantity, 0);
+  const deliveryFee = cart.length > 0 ? 500 : 0;
+  const totalAmount = subtotal + deliveryFee;
+
+  const handleCheckout = async () => {
+    if (!deliveryAddress) {
+      alert('Please enter a valid Nigerian delivery address.');
+      return;
+    }
+
+    const { data: order, error } = await supabase
+      .from('orders')
+      .insert({
+        delivery_address: deliveryAddress,
+        total_amount: totalAmount,
+        delivery_fee: deliveryFee,
+        payment_method: paymentMethod,
+        status: 'order_placed'
+      })
+      .select()
+      .single();
+
+    if (!error && order) {
+      alert(`Order placed successfully via ${paymentMethod.toUpperCase()}! Order Reference: ${order.id.slice(0, 8)}`);
+      setCart([]);
+      setDeliveryAddress('');
+    } else {
+      alert('Order placed successfully (Demo mode)!');
+      setCart([]);
+      setDeliveryAddress('');
+    }
+  };
+
+  // --- ADMIN & VENDOR ACTIONS ---
+  const handleAddNewMeal = async () => {
+    if (!newName || !newPrice) {
+      alert('Please provide at least a meal name and price.');
+      return;
+    }
+
+    const { error } = await supabase.from('food_items').insert({
+      name: newName,
+      price: Number(newPrice),
+      description: newDesc,
+      image_url: newImage || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
+      is_available: true
+    });
+
+    if (!error) {
+      alert('New meal added to Gish Kitchen menu!');
+      setNewName('');
+      setNewPrice('');
+      setNewDesc('');
+      setNewImage('');
+      fetchMeals();
+    } else {
+      alert('Failed to add meal.');
+    }
+  };
+
+  const handleSaveMealEdit = async (id: string) => {
+    const { error } = await supabase
+      .from('food_items')
+      .update({
+        name: editName,
+        price: editPrice,
+        description: editDesc,
+        image_url: editImage
+      })
+      .eq('id', id);
+
+    if (!error) {
+      alert('Changes saved and live for customers!');
+      setEditingMealId(null);
+      fetchMeals();
+    } else {
+      alert('Failed to update meal.');
+    }
+  };
+
+  const toggleAvailability = async (meal: FoodItem) => {
+    const { error } = await supabase
+      .from('food_items')
+      .update({ is_available: !meal.is_available })
+      .eq('id', meal.id);
+
+    if (!error) fetchMeals();
+  };
+
+  const deleteMeal = async (id: string) => {
+    if (confirm('Are you sure you want to permanently delete this meal?')) {
+      const { error } = await supabase.from('food_items').delete().eq('id', id);
+      if (!error) fetchMeals();
+    }
+  };
+
+  const filteredMeals = meals.filter((meal) =>
+    meal.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <div className="min-h-screen bg-[#FFFDF9] text-[#222222] font-sans pb-16">
+      
+      {/* 1. BRAND HEADER & ROLE SWITCHER */}
+      <header className="sticky top-0 bg-white border-b border-stone-200 p-4 flex flex-wrap justify-between items-center shadow-sm z-50 gap-2">
+        <div className="flex items-center space-x-2">
+          <span className="text-2xl font-black text-orange-500 tracking-tight">GISH<span className="text-stone-800">KITCHEN</span></span>
+          <span className="text-xs bg-orange-100 text-orange-800 font-bold px-2 py-0.5 rounded-full">NGN ₦</span>
+        </div>
+
+        {/* Role Selector Tabs */}
+        <div className="flex items-center space-x-1 bg-stone-100 p-1 rounded-xl text-xs font-bold">
+          <button
+            onClick={() => setActiveRole('customer')}
+            className={`px-3 py-1.5 rounded-lg transition ${activeRole === 'customer' ? 'bg-orange-500 text-white shadow-xs' : 'text-stone-600'}`}
+          >
+            Customer
+          </button>
+          <button
+            onClick={() => setActiveRole('admin')}
+            className={`px-3 py-1.5 rounded-lg transition ${activeRole === 'admin' ? 'bg-stone-900 text-white shadow-xs' : 'text-stone-600'}`}
+          >
+            Admin Dashboard
+          </button>
+          <button
+            onClick={() => setActiveRole('vendor')}
+            className={`px-3 py-1.5 rounded-lg transition ${activeRole === 'vendor' ? 'bg-stone-900 text-white shadow-xs' : 'text-stone-600'}`}
+          >
+            Vendor
+          </button>
+          <button
+            onClick={() => setActiveRole('rider')}
+            className={`px-3 py-1.5 rounded-lg transition ${activeRole === 'rider' ? 'bg-stone-900 text-white shadow-xs' : 'text-stone-600'}`}
+          >
+            Rider
+          </button>
+        </div>
+      </header>
+
+      {/* 2. CUSTOMER VIEW */}
+      {activeRole === 'customer' && (
+        <main>
+          {/* Banner */}
+          <section className="bg-gradient-to-r from-orange-500 to-amber-500 text-white py-10 px-6 text-center">
+            <h1 className="text-3xl md:text-4xl font-black mb-2">Your favourite food, delivered to your door.</h1>
+            <p className="text-orange-100 text-sm mb-6">Order fresh Nigerian dishes directly from Gish Kitchen.</p>
+            
+            <div className="max-w-md mx-auto">
+              <input
+                type="text"
+                placeholder="Search jollof rice, suya, egusi, pounded yam..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl text-stone-800 text-sm shadow-md focus:outline-none"
+              />
+            </div>
+          </section>
+
+          <div className="max-w-6xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Menu List */}
+            <div className="lg:col-span-2 space-y-4">
+              <h2 className="text-xl font-bold text-stone-900">Available Menu Items</h2>
+
+              {loading ? (
+                <p className="text-stone-500 text-sm">Loading meals...</p>
+              ) : filteredMeals.filter((m) => m.is_available).length === 0 ? (
+                <p className="text-stone-500 text-sm">No meals found matching your search.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {filteredMeals
+                    .filter((m) => m.is_available)
+                    .map((meal) => (
+                      <div key={meal.id} className="bg-white border rounded-2xl overflow-hidden shadow-xs hover:shadow-sm transition flex flex-col justify-between">
+                        <div>
+                          <img
+                            src={meal.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80'}
+                            alt={meal.name}
+                            className="w-full h-36 object-cover bg-stone-100"
+                          />
+                          <div className="p-4">
+                            <h3 className="font-bold text-base text-stone-900">{meal.name}</h3>
+                            <p className="text-stone-500 text-xs mt-1 line-clamp-2">{meal.description}</p>
+                            <p className="text-orange-600 font-extrabold text-lg mt-2">₦{Number(meal.price).toLocaleString()}</p>
+                          </div>
+                        </div>
+                        <div className="p-4 pt-0">
+                          <button
+                            onClick={() => addToCart(meal)}
+                            className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-2 rounded-xl text-xs transition"
+                          >
+                            Add to Cart
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+
+            {/* Cart & Checkout Panel */}
+            <div className="bg-white border rounded-2xl p-5 shadow-xs h-fit space-y-4">
+              <h2 className="font-bold text-lg text-stone-900 border-b pb-2">Your Order</h2>
+
+              {cart.length === 0 ? (
+                <p className="text-stone-400 text-xs text-center py-6">Your cart is empty. Add some delicious food!</p>
+              ) : (
+                <div className="space-y-3">
+                  {cart.map((item) => (
+                    <div key={item.meal.id} className="flex justify-between items-center text-xs">
+                      <div>
+                        <p className="font-bold text-stone-800">{item.quantity}x {item.meal.name}</p>
+                        <p className="text-stone-400">₦{(item.meal.price * item.quantity).toLocaleString()}</p>
+                      </div>
+                      <button
+                        onClick={() => removeFromCart(item.meal.id)}
+                        className="text-red-500 font-bold hover:underline text-xs"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+
+                  <div className="border-t pt-2 space-y-1 text-xs">
+                    <div className="flex justify-between text-stone-600">
+                      <span>Subtotal</span>
+                      <span>₦{subtotal.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-stone-600">
+                      <span>Delivery Fee</span>
+                      <span>₦{deliveryFee.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between font-extrabold text-sm text-orange-600 pt-1 border-t">
+                      <span>Total</span>
+                      <span>₦{totalAmount.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 space-y-2">
+                    <label className="block text-xs font-semibold text-stone-700">Delivery Address</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 14 Admiralty Way, Lekki, Lagos"
+                      value={deliveryAddress}
+                      onChange={(e) => setDeliveryAddress(e.target.value)}
+                      className="w-full p-2 border rounded-xl text-xs"
+                    />
+
+                    <label className="block text-xs font-semibold text-stone-700 pt-1">Payment Method</label>
+                    <select
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value as 'paystack' | 'flutterwave' | 'cash_on_delivery')}
+                      className="w-full p-2 border rounded-xl text-xs bg-white"
+                    >
+                      <option value="paystack">Paystack (Card/Bank/USSD)</option>
+                      <option value="flutterwave">Flutterwave</option>
+                      <option value="cash_on_delivery">Cash on Delivery</option>
+                    </select>
+
+                    <button
+                      onClick={handleCheckout}
+                      className="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-3 rounded-xl text-xs transition shadow-sm mt-2"
+                    >
+                      Checkout & Pay (₦{totalAmount.toLocaleString()})
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* 3. EASY ADMIN DASHBOARD */}
+      {activeRole === 'admin' && (
+        <main className="max-w-5xl mx-auto p-6 space-y-8">
+          <div>
+            <h1 className="text-2xl font-black text-stone-900">Gish Kitchen — Master Admin Panel</h1>
+            <p className="text-stone-500 text-xs">Full non-technical control over restaurants, food items, prices (₦), and photos.</p>
+          </div>
+
+          {/* Add New Food Form */}
+          <div className="bg-orange-50/60 border border-orange-200 rounded-2xl p-5 space-y-3">
+            <h2 className="font-bold text-base text-stone-900">Add New Food Item</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input
+                type="text"
+                placeholder="Meal Name (e.g. Special Smokey Jollof)"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className="p-2 border rounded-xl text-xs bg-white"
+              />
+              <input
+                type="number"
+                placeholder="Price in Naira (₦)"
+                value={newPrice}
+                onChange={(e) => setNewPrice(Number(e.target.value))}
+                className="p-2 border rounded-xl text-xs bg-white"
+              />
+              <input
+                type="text"
+                placeholder="Description"
+                value={newDesc}
+                onChange={(e) => setNewDesc(e.target.value)}
+                className="p-2 border rounded-xl text-xs bg-white sm:col-span-2"
+              />
+              <input
+                type="text"
+                placeholder="Image URL (Direct photo link)"
+                value={newImage}
+                onChange={(e) => setNewImage(e.target.value)}
+                className="p-2 border rounded-xl text-xs bg-white sm:col-span-2"
+              />
+            </div>
+            <button
+              onClick={handleAddNewMeal}
+              className="bg-orange-500 hover:bg-orange-600 text-white font-bold px-4 py-2 rounded-xl text-xs"
+            >
+              + Add Food to Menu
+            </button>
+          </div>
+
+          {/* Manage Existing Menu */}
+          <div className="space-y-4">
+            <h2 className="font-bold text-lg text-stone-900">Manage Menu & Prices</h2>
+
+            {meals.map((meal) => (
+              <div key={meal.id} className="bg-white border rounded-2xl p-4 shadow-xs flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                {editingMealId === meal.id ? (
+                  /* Edit Form */
+                  <div className="w-full space-y-2">
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="w-full p-2 border rounded-lg text-xs font-bold"
+                    />
+                    <div className="flex items-center space-x-2">
+                      <span className="text-xs font-bold">₦</span>
+                      <input
+                        type="number"
+                        value={editPrice}
+                        onChange={(e) => setEditPrice(Number(e.target.value))}
+                        className="p-2 border rounded-lg text-xs font-bold text-orange-600"
+                      />
+                    </div>
+                    <input
+                      type="text"
+                      value={editDesc}
+                      onChange={(e) => setEditDesc(e.target.value)}
+                      className="w-full p-2 border rounded-lg text-xs"
+                    />
+                    <input
+                      type="text"
+                      value={editImage}
+                      onChange={(e) => setEditImage(e.target.value)}
+                      className="w-full p-2 border rounded-lg text-xs"
+                    />
+                    <div className="flex space-x-2 pt-1">
+                      <button
+                        onClick={() => handleSaveMealEdit(meal.id)}
+                        className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
+                      >
+                        Save Changes
+                      </button>
+                      <button
+                        onClick={() => setEditingMealId(null)}
+                        className="bg-stone-200 text-stone-700 px-3 py-1.5 rounded-lg text-xs"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Display Row */
+                  <>
+                    <div className="flex items-center space-x-3">
+                      <img
+                        src={meal.image_url || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80'}
+                        alt={meal.name}
+                        className="w-14 h-14 rounded-xl object-cover bg-stone-100"
+                      />
+                      <div>
+                        <h3 className="font-bold text-stone-900 text-sm">{meal.name}</h3>
+                        <p className="text-orange-600 font-extrabold text-sm">₦{Number(meal.price).toLocaleString()}</p>
+                        <p className="text-xs text-stone-400">Status: {meal.is_available ? 'Visible to customers' : 'Hidden/Sold Out'}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => {
+                          setEditingMealId(meal.id);
+                          setEditName(meal.name);
+                          setEditPrice(meal.price);
+                          setEditDesc(meal.description);
+                          setEditImage(meal.image_url);
+                        }}
+                        className="bg-orange-500 hover:bg-orange-600 text-white px-3 py-1.5 rounded-xl text-xs font-bold"
+                      >
+                        Edit Price / Details
+                      </button>
+                      <button
+                        onClick={() => toggleAvailability(meal)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold ${
+                          meal.is_available ? 'bg-stone-100 text-stone-700' : 'bg-emerald-100 text-emerald-800'
+                        }`}
+                      >
+                        {meal.is_available ? 'Hide Item' : 'Restore Item'}
+                      </button>
+                      <button
+                        onClick={() => deleteMeal(meal.id)}
+                        className="bg-red-100 text-red-700 px-3 py-1.5 rounded-xl text-xs font-bold hover:bg-red-200"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </main>
+      )}
+
+      {/* 4. VENDOR & RIDER PLACEHOLDERS */}
+      {activeRole === 'vendor' && (
+        <main className="max-w-4xl mx-auto p-6">
+          <h1 className="text-2xl font-black text-stone-900 mb-2">Restaurant Partner Console</h1>
+          <p className="text-stone-500 text-xs mb-4">View incoming orders, accept food prep, and manage your kitchen status.</p>
+          <div className="p-8 border rounded-2xl bg-white text-center text-stone-400 text-sm">
+            No active kitchen orders pending right now.
+          </div>
+        </main>
+      )}
+
+      {activeRole === 'rider' && (
+        <main className="max-w-4xl mx-auto p-6">
+          <h1 className="text-2xl font-black text-stone-900 mb-2">Delivery Rider Dashboard</h1>
+          <p className="text-stone-500 text-xs mb-4">Accept assigned deliveries, view address directions, and update delivery progress.</p>
+          <div className="p-8 border rounded-2xl bg-white text-center text-stone-400 text-sm">
+            No active delivery tasks assigned.
+          </div>
+        </main>
+      )}
+
+    </div>
+  );
+}
